@@ -1,9 +1,13 @@
 import sys
+import platform
 import os
+import json
+import subprocess
 import appdirs
 import re
 import numpy as np
 import cv2
+from languages import get_system_language, get_language_dict, map_system_language_to_application_language
 from PyQt5.QtWidgets import QComboBox, QInputDialog, QApplication, QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QTextEdit, QLabel, QFileDialog, QMenuBar, QAction, QMessageBox, QSplitter, QSizePolicy
 from PyQt5.QtGui import QIcon, QPixmap
 from PyQt5.QtCore import QThread, pyqtSignal, Qt
@@ -12,6 +16,8 @@ from docx import Document
 import pytesseract
 import deepl
 
+
+# set file path to store personal DeepL api key
 def get_api_key_file_path():
     app_name = "OCR-Tool"
     app_author = "MedMate"  
@@ -19,12 +25,7 @@ def get_api_key_file_path():
     os.makedirs(app_dir, exist_ok=True)
     return os.path.join(app_dir, "api_key.txt")
 
-def get_language_file_path():
-    app_name = "OCR-Tool"
-    app_author = "MedMate"  
-    app_dir = appdirs.user_data_dir(app_name, app_author)
-    os.makedirs(app_dir, exist_ok=True)
-    return os.path.join(app_dir, "language.txt")
+
 
 # Function to perform OCR on an image
 def ocr_on_image(image):
@@ -92,43 +93,26 @@ class MainWindow(QWidget):
     def __init__(self):
         super().__init__()
         self.api_key = self.load_api_key()
-        self.language = self.load_language_preference()
-        # ISO 639-1 language codes
-        # Please note that for Chinese, the code 'ZH' is used, which is a macro language 
-        # encompassing Mandarin, Cantonese, and other dialects. For Norwegian, the code 'NO' is used, 
-        # which does not distinguish between Bokmål and Nynorsk.
-        self.language_dict = {
-            'English': 'EN',
-            'German': 'DE',
-            'French': 'FR',
-            'Spanish': 'ES',
-            'Bulgarian': 'BG',
-            'Chinese': 'ZH',
-            'Czech': 'CS',
-            'Danish': 'DA',
-            'Dutch': 'NL',
-            'Estonian': 'ET',
-            'Finnish': 'FI',
-            'Greek': 'EL',
-            'Hungarian': 'HU',
-            'Indonesian': 'ID',
-            'Italian': 'IT',
-            'Japanese': 'JA',
-            'Korean': 'KO',
-            'Latvian': 'LV',
-            'Lithuanian': 'LT',
-            'Norwegian': 'NO',
-            'Polish': 'PL',
-            'Portuguese': 'PT',
-            'Romanian': 'RO',
-            'Russian': 'RU',
-            'Slovak': 'SK',
-            'Slovenian': 'SL',
-            'Swedish': 'SV',
-            'Turkish': 'TR',
-            'Ukrainian': 'UK'
-        }    
+
+        # Check if the language.txt file exists, if not, create with default values
+        if not os.path.exists(self.get_language_file_path()):
+            os_language = get_system_language()
+            language_code, language_name = map_system_language_to_application_language(os_language)
+            language_code = language_code.upper()
+            self.save_language_preferences(language_name, language_code, language_name, language_code)
+
+        # Load the system language preference and set self.language
+        self.system_language, self.system_language_code, self.translation_language, self.translation_language_code = self.load_language_preferences()
+
+        # Assuming self.language should be the translation language
+        self.language = self.translation_language_code
+
+        # Load the language dictionary based on the system language
+        self.language_dict = get_language_dict(self.system_language_code)
+
+        # Now initialize the UI components
         self.init_ui()
+
 
     def init_ui(self):
         self.setWindowTitle("PDF to OCR by @MedMate")
@@ -137,11 +121,26 @@ class MainWindow(QWidget):
         self.layout = QVBoxLayout()
         self.setLayout(self.layout)
 
+        # Initialize the language_selector
+        self.language_selector = QComboBox()
+        self.populate_language_selector()        
         self.setup_menu()
         self.setup_widgets()
 
-    def show_about_dialog(self):
-        QMessageBox.about(self, "Info", "PDF to OCR Application including translation\n\nContact\ndominik.pytlik@gmail.com\n\nSwitzerland\nDecember 2023")
+
+    def populate_language_selector(self):
+        self.language_selector.clear()
+        for language_name in self.language_dict.keys():
+            self.language_selector.addItem(language_name)
+
+        # Set the current selection in the language selector
+        if self.translation_language_code in self.language_dict.values():
+            current_translation_language_name = [name for name, code in self.language_dict.items() if code == self.translation_language_code][0]
+            self.language_selector.setCurrentText(current_translation_language_name)
+        else:
+            # Handle the case where the current translation language is not valid
+            pass
+
 
     def process_pdf(self):
         if self.ocr_thread and self.ocr_thread.isRunning():
@@ -149,7 +148,7 @@ class MainWindow(QWidget):
             return        
         pdf_path, _ = QFileDialog.getOpenFileName(self, "Open File", "/", "PDF files (*.pdf)")
         if pdf_path:
-            self.status_label.setText("translating... Please wait.")
+            self.status_label.setText("Translating... Please wait.")
             self.ocr_thread = OCRThread(pdf_path)
             self.ocr_thread.ocr_complete.connect(self.on_ocr_complete)
             self.ocr_thread.start()
@@ -176,13 +175,27 @@ class MainWindow(QWidget):
         text = re.sub(r"[^a-zA-Z0-9-/.,;:'\s]", '', text)
         return text
 
+    def translate_text(self, text):
+        translator = deepl.Translator(self.api_key)
+        try:
+            result = translator.translate_text(text, target_lang=self.language)  # Use the selected language code
+            return result.text
+        except Exception as e:
+            QMessageBox.critical(self, "Translation Error", str(e))
+            return ""
+
 
     def setup_menu(self):
         self.menu_bar = QMenuBar(self)
 
+        settings_menu = self.menu_bar.addMenu('Settings')
         file_menu = self.menu_bar.addMenu('File')
         help_menu = self.menu_bar.addMenu('Help')
         about_menu = self.menu_bar.addMenu('Info')
+
+        set_app_lang = QAction('Set Application Language', self)
+        set_app_lang.triggered.connect(self.set_app_language)
+        settings_menu.addAction(set_app_lang)
 
         open_action = QAction('Open file', self)
         open_action.triggered.connect(self.process_pdf)
@@ -201,6 +214,62 @@ class MainWindow(QWidget):
         help_menu.addAction(about_action)
 
         self.layout.setMenuBar(self.menu_bar)
+            
+    def set_app_language(self):
+        # Load the current language preferences
+        _, current_language_code, _, translation_language_code = self.load_language_preferences()
+
+        # Get a list of language names from the current dictionary
+        language_names = list(get_language_dict(current_language_code).keys())
+
+        # Find the index of the current language in the list
+        current_index = language_names.index(self.system_language) if self.system_language in language_names else 0
+
+        # Open the language selection dialog
+        new_language_name, ok = QInputDialog.getItem(self, "Select Language", "Language:", language_names, current_index)
+        
+        if ok and new_language_name:
+            # Get the new language code from the dictionary
+            new_language_code = get_language_dict(current_language_code)[new_language_name]
+
+            # Update the system language and code
+            self.system_language = new_language_name
+            self.system_language_code = new_language_code
+
+            # Save the updated language preferences
+            self.save_language_preferences(self.system_language, self.system_language_code, _, translation_language_code)
+
+            self.system_language_dict = get_language_dict(self.system_language_code)
+
+            # Update the language selector with new options
+            self.populate_language_selector()
+
+            # Update the translation language selector in the UI
+            self.update_translation_language_selector()
+
+    def update_translation_language_selector(self):
+        # Clear the current items in the translation language selector
+        self.language_selector.clear()
+
+        # Add the new language options to the selector
+        for language_name in self.system_language_dict.keys():
+            self.language_selector.addItem(language_name)
+
+        # Optionally, set the current translation language as the selected item
+        current_translation_language_name = self.get_full_language_name(self.system_language_code)  # Replace '_' with the current translation language code
+        self.language_selector.setCurrentText(current_translation_language_name)
+
+
+    def show_about_dialog(self):
+        QMessageBox.about(self, "Info", "PDF to OCR Application including translation\n\nContact\ndominik.pytlik@gmail.com\n\nSwitzerland\nDecember 2023")
+
+    def load_api_key(self):
+        api_key_file_path = get_api_key_file_path()
+        try:
+            with open(api_key_file_path, "r") as file:
+                return file.read().strip()
+        except FileNotFoundError:
+            return ""
 
     def change_api_key(self):
         new_key, ok = QInputDialog.getText(self, 'Change API Key', 
@@ -208,17 +277,22 @@ class MainWindow(QWidget):
         if ok and new_key:
             self.api_key = new_key
             self.save_api_key(new_key)
+        
+    def save_api_key(self, key):
+        api_key_file_path = get_api_key_file_path()
+        with open(api_key_file_path, "w") as file:
+            file.write(key)
 
+            
     def setup_widgets(self):
-        layout = QVBoxLayout()
 
         self.setup_labels_and_fields()
-
+        
         # Vertical Splitter for Entire Layout
         main_splitter = QSplitter(Qt.Vertical)
 
         top_horizontal_splitter = QSplitter(Qt.Horizontal)
-        top_horizontal_splitter.addWidget(self.info_label)
+        top_horizontal_splitter.addWidget(self.process_button)
         top_horizontal_splitter.addWidget(self.language_selector)
 
         bottom_horizontal_splitter = QSplitter(Qt.Horizontal)
@@ -234,12 +308,9 @@ class MainWindow(QWidget):
         bottom_horizontal_splitter.splitterMoved.connect(self.sync_splitter(top_horizontal_splitter))
 
         # Adding widgets to the layout
-        self.layout.addWidget(self.process_button)
         self.layout.addWidget(main_splitter)
         self.layout.addWidget(self.status_label)
         self.layout.addWidget(self.close_button)
-
-        self.setLayout(layout)
 
         # Set up the OCR thread
         self.ocr_thread = None
@@ -252,17 +323,12 @@ class MainWindow(QWidget):
         return syncer
 
     def setup_labels_and_fields(self):
-        
-        # Info Box - automatic language detection
-        self.info_label = QLabel("PDF language detection\nby DeepL")
-        self.info_label.setAlignment(Qt.AlignCenter)
-        self.info_label.setStyleSheet("font-size: 16px; padding: 5px 30px; color: #AEC6CF;")
-        
+        system_language, system_language_code, translation_language, self.translation_language_code = self.load_language_preferences()
         # Target Language Selector
         self.language_selector = QComboBox()
         self.language_selector.setStyleSheet(self.get_dropdown_style("#75A1BF"))
         self.language_selector.addItems(self.language_dict.keys())
-        self.language_selector.setCurrentText(self.get_full_language_name(self.language))
+        self.language_selector.setCurrentText(self.get_full_language_name(self.translation_language_code))
         self.language_selector.currentIndexChanged.connect(self.on_language_change)        
 
         # Text Display and Edit Field
@@ -284,53 +350,7 @@ class MainWindow(QWidget):
         self.status_label = QLabel("Ready")
         self.status_label.setAlignment(Qt.AlignCenter)
         self.status_label.setStyleSheet("font-size: 16px; color: #AEC6CF;")        
-                
-    def load_api_key(self):
-        api_key_file_path = get_api_key_file_path()
-        try:
-            with open(api_key_file_path, "r") as file:
-                return file.read().strip()
-        except FileNotFoundError:
-            return ""
-        
-    def save_api_key(self, key):
-        api_key_file_path = get_api_key_file_path()
-        with open(api_key_file_path, "w") as file:
-            file.write(key)
 
-    def translate_text(self, text):
-        translator = deepl.Translator(self.api_key)
-        try:
-            result = translator.translate_text(text, target_lang=self.language)  # Use the selected language code
-            return result.text
-        except Exception as e:
-            QMessageBox.critical(self, "Translation Error", str(e))
-            return ""
-
-    def get_full_language_name(self, language_code):
-        for name, code in self.language_dict.items():
-            if code == language_code:
-                return name
-        return 'English'  # Default language
-            
-    def load_language_preference(self):
-        language_file_path = get_language_file_path()
-        try:
-            with open(language_file_path, "r") as file:
-                return file.read().strip()
-        except FileNotFoundError:
-            return "English"  # Default language                
-
-    def on_language_change(self, index):
-        full_language_name = self.language_selector.currentText()
-        self.language = self.language_dict[full_language_name]
-        self.save_language_preference(self.language)
-
-    def save_language_preference(self, language):
-        language_file_path = get_language_file_path()
-        with open(language_file_path, "w") as file:
-            file.write(language)
-        
     def save_to_doc(self, text, doc_path):
         doc = Document()
         doc.add_paragraph(text)
@@ -342,7 +362,69 @@ class MainWindow(QWidget):
         elif sys.platform == "darwin":  # macOS
             os.system(f"open {file_path}")
         else:  # linux variants
-            os.system(f"xdg-open {file_path}")
+            os.system(f"xdg-open {file_path}")                
+
+    def get_full_language_name(self, language_code):
+        for name, code in self.language_dict.items():
+            if code == language_code:
+                return name
+        return 'English'  # Default language
+
+    
+    # set file path to store target language preference
+    def get_language_file_path(self):
+        app_name = "OCR-Tool"
+        app_author = "MedMate"  
+        app_dir = appdirs.user_data_dir(app_name, app_author)
+        os.makedirs(app_dir, exist_ok=True)
+        return os.path.join(app_dir, "language.txt")
+            
+    def load_language_preferences(self):
+        language_file_path = self.get_language_file_path()
+
+        # Check if the file exists, and create it with default values if it doesn't
+        if not os.path.exists(language_file_path):
+            self.save_language_preferences("English", "EN", "English", "EN")
+
+        try:
+            with open(language_file_path, 'r') as file:
+                preferences = json.load(file)
+                return (preferences.get('system_language', "English"),
+                        preferences.get('system_language_code', "EN"),
+                        preferences.get('translation_language', "English"),
+                        preferences.get('translation_language_code', "EN"))
+        except FileNotFoundError:
+            return "English", "EN", "English", "EN"  # Default values
+
+        
+    def save_language_preferences(self, system_language, system_language_code, translation_language, translation_language_code):
+        language_file_path = self.get_language_file_path()
+        preferences = {
+            'system_language': system_language,
+            'system_language_code': system_language_code,  
+            'translation_language': translation_language, 
+            'translation_language_code': translation_language_code,  
+        }
+        with open(language_file_path, 'w') as file:
+            json.dump(preferences, file)
+ 
+    def on_language_change(self, index):
+        full_language_name = self.language_selector.currentText()
+        if full_language_name:
+            self.translation_language_code = self.language_dict.get(full_language_name)
+            if self.translation_language_code:
+                # Load the current system language preferences
+                system_language, system_language_code, _, _ = self.load_language_preferences()
+
+                # Save both system and translation language preferences
+                self.save_language_preferences(system_language, system_language_code, full_language_name, self.translation_language_code)
+            else:
+                # Handle the case where the language name is not in the dictionary
+                pass
+        else:
+            # Handle the case where the language selector returns an empty string
+            pass
+
                         
     def get_button_style(self, background_color):
         """ Returns the style sheet for buttons. """
@@ -350,12 +432,11 @@ class MainWindow(QWidget):
             QPushButton {{
                 background-color: {background_color};
                 color: white;
-                padding: 15px 32px;
-                text-align: center;
                 font-size: 20px;
+                padding: 15px 10px;
+                text-align: center;
                 border-radius: 6px;
-                min-width: 150px;
-                min-height: 50px;
+                min-width: 100px;
             }}
             QPushButton:hover {{
                 background-color: #F0ECD3; /* Light Cream */
@@ -369,19 +450,22 @@ class MainWindow(QWidget):
             QComboBox {{
                 background-color: {background_color};
                 color: white;
-                padding: 5px 30px;
-                text-align: center;
+                padding: 15px 10px;
                 font-size: 20px;
                 border-radius: 6px;
-                min-width: 140px;
-                min-height: 25px;
+                min-width: 105px;
             }}
             QComboBox:hover {{
                 background-color: #F0ECD3; /* Light Cream */
                 color: {background_color};
             }}
+            QComboBox::down-arrow {{
+                image: none; /* This line removes the arrow */
+            }}
+            QComboBox::drop-down {{
+                border: none; /* This line removes the border around the arrow area */
+            }}
         """
-
 
     def setup_text_edit_styles(self):
         """ Sets the style for text edit fields. """
@@ -392,15 +476,14 @@ class MainWindow(QWidget):
                 background-color: #FFFDD0; /* Light Pastel Yellow */
                 selection-color: black;
                 selection-background-color: #B0E0E6; /* Powder Blue */
-                padding: 5px 30px;
+                padding: 15px 10px;
                 border-radius: 6px;
-                min-width: 140px;
+                min-width: 105px;
             }
         """
         self.text_display.setStyleSheet(style)
         self.edit_field.setStyleSheet(style)
         
-
 # Create and run the application
 app = QApplication(sys.argv)
 main_window = MainWindow()
