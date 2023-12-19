@@ -1,8 +1,6 @@
 import sys
-import platform
 import os
 import json
-import subprocess
 import appdirs
 import re
 import numpy as np
@@ -24,8 +22,6 @@ def get_api_key_file_path():
     app_dir = appdirs.user_data_dir(app_name, app_author)
     os.makedirs(app_dir, exist_ok=True)
     return os.path.join(app_dir, "api_key.txt")
-
-
 
 # Function to perform OCR on an image
 def ocr_on_image(image):
@@ -127,7 +123,6 @@ class MainWindow(QWidget):
         self.setup_menu()
         self.setup_widgets()
 
-
     def populate_language_selector(self):
         self.language_selector.clear()
         for language_name in self.language_dict.keys():
@@ -188,30 +183,28 @@ class MainWindow(QWidget):
     def setup_menu(self):
         self.menu_bar = QMenuBar(self)
 
+        file_menu = self.menu_bar.addMenu('Start')
         settings_menu = self.menu_bar.addMenu('Settings')
-        file_menu = self.menu_bar.addMenu('File')
-        help_menu = self.menu_bar.addMenu('Help')
-        about_menu = self.menu_bar.addMenu('Info')
 
-        set_app_lang = QAction('Set Application Language', self)
-        set_app_lang.triggered.connect(self.set_app_language)
-        settings_menu.addAction(set_app_lang)
-
-        open_action = QAction('Open file', self)
+        open_action = QAction('Open', self)
         open_action.triggered.connect(self.process_pdf)
         file_menu.addAction(open_action)        
         
-        change_api_action = QAction('Change API Key', self)
-        change_api_action.triggered.connect(self.change_api_key)
-        file_menu.addAction(change_api_action)
-        
         exit_action = QAction('Close', self)
         exit_action.triggered.connect(self.close)
-        file_menu.addAction(exit_action)
+        file_menu.addAction(exit_action)        
 
-        about_action = QAction('Info', self)
-        about_action.triggered.connect(self.show_about_dialog)
-        help_menu.addAction(about_action)
+        set_app_lang = QAction('Application Language', self)
+        set_app_lang.triggered.connect(self.set_app_language)
+        settings_menu.addAction(set_app_lang)
+
+        change_api_action = QAction('DeepL API Key', self)
+        change_api_action.triggered.connect(self.change_api_key)
+        settings_menu.addAction(change_api_action)
+        
+        about_action = QAction('About', self)
+        about_action.triggered.connect(self.show_about_dialog)  # Connect to the about dialog
+        file_menu.addAction(about_action)
 
         self.layout.setMenuBar(self.menu_bar)
             
@@ -226,7 +219,7 @@ class MainWindow(QWidget):
         current_index = language_names.index(self.system_language) if self.system_language in language_names else 0
 
         # Open the language selection dialog
-        new_language_name, ok = QInputDialog.getItem(self, "Select Language", "Language:", language_names, current_index)
+        new_language_name, ok = QInputDialog.getItem(self, "Select Language", "Set Application Language", language_names, current_index)
         
         if ok and new_language_name:
             # Get the new language code from the dictionary
@@ -292,10 +285,12 @@ class MainWindow(QWidget):
         main_splitter = QSplitter(Qt.Vertical)
 
         top_horizontal_splitter = QSplitter(Qt.Horizontal)
+
         top_horizontal_splitter.addWidget(self.process_button)
         top_horizontal_splitter.addWidget(self.language_selector)
 
         bottom_horizontal_splitter = QSplitter(Qt.Horizontal)
+
         bottom_horizontal_splitter.addWidget(self.text_display)
         bottom_horizontal_splitter.addWidget(self.edit_field)
 
@@ -308,7 +303,7 @@ class MainWindow(QWidget):
         bottom_horizontal_splitter.splitterMoved.connect(self.sync_splitter(top_horizontal_splitter))
 
         # Adding widgets to the layout
-        self.layout.addWidget(main_splitter)
+        self.layout.addWidget(main_splitter)              
         self.layout.addWidget(self.status_label)
         self.layout.addWidget(self.close_button)
 
@@ -342,7 +337,7 @@ class MainWindow(QWidget):
         self.process_button.clicked.connect(self.process_pdf)
         
         # 'Close' Button
-        self.close_button = QPushButton("Close")
+        self.close_button = QPushButton("Exit")
         self.close_button.setStyleSheet(self.get_button_style("#75A1BF"))
         self.close_button.clicked.connect(self.close)        
 
@@ -436,7 +431,7 @@ class MainWindow(QWidget):
                 padding: 15px 10px;
                 text-align: center;
                 border-radius: 6px;
-                min-width: 100px;
+                min-width: 115px;
             }}
             QPushButton:hover {{
                 background-color: #F0ECD3; /* Light Cream */
@@ -478,7 +473,7 @@ class MainWindow(QWidget):
                 selection-background-color: #B0E0E6; /* Powder Blue */
                 padding: 15px 10px;
                 border-radius: 6px;
-                min-width: 105px;
+                min-width: 110px;
             }
         """
         self.text_display.setStyleSheet(style)
